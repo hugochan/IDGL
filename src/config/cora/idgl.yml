@@ -1,0 +1,105 @@
+# Data
+data_type: 'network'
+dataset_name: 'cora'
+data_dir: '../data/cora/'
+pretrained: null
+task_type: 'classification'
+
+# Output
+out_dir: '../out/cora/idgl'
+
+
+
+seed: #42 # 42
+    - 42
+    - 448
+    - 854
+    - 29493
+    - 88867
+
+
+# Model architecture
+model_name: 'GraphClf'
+
+hidden_size: 16
+
+
+# Bert configure
+use_bert: False
+
+
+
+# Regularization
+dropout: 0.5 # 0.5
+feat_adj_dropout: 0.5 # 0.5
+gl_dropout: 0.5 # 0.5
+
+# Graph neural networks
+bignn: False
+graph_module: 'gcn'
+graph_type: 'dynamic'
+graph_learn: True
+graph_metric_type: 'weighted_cosine' # weighted_cosine
+graph_skip_conn: 0.8 # IDGL: 0.8
+update_adj_ratio: 0.1 # IDGL: 0.1
+graph_include_self: False
+graph_learn_regularization: True
+smoothness_ratio: 0.2 # IDGL: 0.2
+degree_ratio: 0 # IDGL: 0
+sparsity_ratio: 0 # IDGL: 0
+graph_learn_ratio: 0 # 0
+graph_learn_hidden_size: null
+graph_learn_epsilon: 0 # weighted_cosine: 0
+graph_learn_topk: null
+# graph_learn_hidden_size2: null
+# graph_learn_epsilon2: 0 # weighted_cosine: 0
+# graph_learn_topk2: null
+graph_learn_num_pers: 4 # IDGL: 4
+graph_hops: 2
+
+# GAT only
+gat_nhead: 8
+gat_alpha: 0.2
+
+
+# Training
+optimizer: 'adam'
+learning_rate: 0.01 # 0.01
+weight_decay: 0.0005 # 0.0005
+lr_patience: 2
+lr_reduce_factor: 0.5
+grad_clipping: null
+grad_accumulated_steps: 1
+eary_stop_metric: 'nloss' # negative loss
+pretrain_epoch: 0 # 0
+max_iter: 10
+eps_adj: 4e-5 # IDGL: 4e-5
+
+
+# note: RL is not used
+rl_ratio: 0  # use mixed objective if > 0; ratio of RL in the loss function
+rl_ratio_power: 1  # increase rl_ratio by **= rl_ratio_power after each epoch; (0, 1]
+rl_start_epoch: 1  # start RL at which epoch (later start can ensure a strong baseline)?
+max_rl_ratio: 0.99
+rl_reward_metric: 'acc'
+rl_wmd_ratio: 0
+
+
+random_seed: 1234
+shuffle: True # Whether to shuffle the examples during training
+max_epochs: 10000
+patience: 100
+verbose: 20
+print_every_epochs: 500 # Print every X epochs
+
+
+# Testing
+out_predictions: False # Whether to output predictions
+out_raw_learned_adj_path: 'cora_idgl_raw_adj.npy'
+save_params: True # Whether to save params
+logging: True # Turn it off for Codalab
+
+
+# Device
+no_cuda: False
+cuda_id: -1
