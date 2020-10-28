@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..utils.generic_utils import to_cuda
+from ..utils.generic_utils import to_cuda, normalize_adj
 from ..utils.constants import VERY_SMALL_NUMBER, INF
 
 
@@ -16,21 +16,21 @@ def compute_normalized_laplacian(adj):
     return L_norm
 
 
-class GraphLearner(nn.Module):
+class AnchorGraphLearner(nn.Module):
     def __init__(self, input_size, hidden_size, topk=None, epsilon=None, num_pers=16, metric_type='attention', device=None):
-        super(GraphLearner, self).__init__()
+        super(AnchorGraphLearner, self).__init__()
         self.device = device
         self.topk = topk
         self.epsilon = epsilon
         self.metric_type = metric_type
         if metric_type == 'attention':
             self.linear_sims = nn.ModuleList([nn.Linear(input_size, hidden_size, bias=False) for _ in range(num_pers)])
-            print('[ Multi-perspective {} GraphLearner: {} ]'.format(metric_type, num_pers))
+            print('[ Multi-perspective {} AnchorGraphLearner: {} ]'.format(metric_type, num_pers))
 
         elif metric_type == 'weighted_cosine':
             self.weight_tensor = torch.Tensor(num_pers, input_size)
             self.weight_tensor = nn.Parameter(nn.init.xavier_uniform_(self.weight_tensor))
-            print('[ Multi-perspective {} GraphLearner: {} ]'.format(metric_type, num_pers))
+            print('[ Multi-perspective {} AnchorGraphLearner: {} ]'.format(metric_type, num_pers))
 
 
         elif metric_type == 'gat_attention':
@@ -39,7 +39,7 @@ class GraphLearner(nn.Module):
 
             self.leakyrelu = nn.LeakyReLU(0.2)
 
-            print('[ GAT_Attention GraphLearner]')
+            print('[ GAT_Attention AnchorGraphLearner]')
 
         elif metric_type == 'kernel':
             self.precision_inv_dis = nn.Parameter(torch.Tensor(1, 1))
@@ -58,7 +58,7 @@ class GraphLearner(nn.Module):
 
         print('[ Graph Learner metric type: {} ]'.format(metric_type))
 
-    def forward(self, context, ctx_mask=None):
+    def forward(self, context, anchors, ctx_mask=None, anchor_mask=None):
         """
         Parameters
         :context, (batch_size, ctx_size, dim)
@@ -83,7 +83,11 @@ class GraphLearner(nn.Module):
 
             context_fc = context.unsqueeze(0) * expand_weight_tensor
             context_norm = F.normalize(context_fc, p=2, dim=-1)
-            attention = torch.matmul(context_norm, context_norm.transpose(-1, -2)).mean(0)
+
+            anchors_fc = anchors.unsqueeze(0) * expand_weight_tensor
+            anchors_norm = F.normalize(anchors_fc, p=2, dim=-1)
+
+            attention = torch.matmul(context_norm, anchors_norm.transpose(-1, -2)).mean(0)
             markoff_value = 0
 
 
@@ -118,14 +122,17 @@ class GraphLearner(nn.Module):
 
 
         if ctx_mask is not None:
-            attention = attention.masked_fill_(1 - ctx_mask.byte().unsqueeze(1), markoff_value)
             attention = attention.masked_fill_(1 - ctx_mask.byte().unsqueeze(-1), markoff_value)
+
+        if anchor_mask is not None:
+            attention = attention.masked_fill_(1 - anchor_mask.byte().unsqueeze(-2), markoff_value)
 
         if self.epsilon is not None:
             attention = self.build_epsilon_neighbourhood(attention, self.epsilon, markoff_value)
 
         if self.topk is not None:
             attention = self.build_knn_neighbourhood(attention, self.topk, markoff_value)
+
         return attention
 
     def build_knn_neighbourhood(self, attention, topk, markoff_value):

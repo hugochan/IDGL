@@ -5,6 +5,7 @@ import re
 import pickle
 import numpy as np
 from collections import Counter
+from functools import lru_cache
 
 from .. import constants
 

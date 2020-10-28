@@ -8,6 +8,7 @@ import scipy.sparse as sp
 from sklearn.neighbors import kneighbors_graph
 import torch
 
+
 from ..generic_utils import *
 from ..constants import VERY_SMALL_NUMBER
 
@@ -43,7 +44,77 @@ def normalize_features(mx):
     return mx
 
 
-def load_data(data_dir, dataset_str, knn_size=None, epsilon=None, knn_metric='cosine', prob_del_edge=None, prob_add_edge=None, seed=1234):
+# def load_data(data_dir, dataset_str):
+#     """
+#     Loads input data from gcn/data directory
+#     ind.dataset_str.x => the feature vectors of the training instances as scipy.sparse.csr.csr_matrix object;
+#     ind.dataset_str.tx => the feature vectors of the test instances as scipy.sparse.csr.csr_matrix object;
+#     ind.dataset_str.allx => the feature vectors of both labeled and unlabeled training instances
+#         (a superset of ind.dataset_str.x) as scipy.sparse.csr.csr_matrix object;
+#     ind.dataset_str.y => the one-hot labels of the labeled training instances as numpy.ndarray object;
+#     ind.dataset_str.ty => the one-hot labels of the test instances as numpy.ndarray object;
+#     ind.dataset_str.ally => the labels for instances in ind.dataset_str.allx as numpy.ndarray object;
+#     ind.dataset_str.graph => a dict in the format {index: [index_of_neighbor_nodes]} as collections.defaultdict
+#         object;
+#     ind.dataset_str.test.index => the indices of test instances in graph, for the inductive setting as list object.
+#     All objects above must be saved using python pickle module.
+#     :param dataset_str: Dataset name
+#     :return: All data input files loaded (as well the training/test data).
+#     """
+#     names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
+#     objects = []
+#     for i in range(len(names)):
+#         with open(os.path.join(data_dir, 'ind.{}.{}'.format(dataset_str, names[i])), 'rb') as f:
+#             if sys.version_info > (3, 0):
+#                 objects.append(pkl.load(f, encoding='latin1'))
+#             else:
+#                 objects.append(pkl.load(f))
+
+#     x, y, tx, ty, allx, ally, graph = tuple(objects)
+#     test_idx_reorder = parse_index_file(os.path.join(data_dir, 'ind.{}.test.index'.format(dataset_str)))
+#     test_idx_range = np.sort(test_idx_reorder)
+
+#     if dataset_str == 'citeseer':
+#         # Fix citeseer dataset (there are some isolated nodes in the graph)
+#         # Find isolated nodes, add them as zero-vecs into the right position
+#         test_idx_range_full = range(min(test_idx_reorder), max(test_idx_reorder)+1)
+#         tx_extended = sp.lil_matrix((len(test_idx_range_full), x.shape[1]))
+#         tx_extended[test_idx_range-min(test_idx_range), :] = tx
+#         tx = tx_extended
+#         ty_extended = np.zeros((len(test_idx_range_full), y.shape[1]))
+#         ty_extended[test_idx_range-min(test_idx_range), :] = ty
+#         ty = ty_extended
+
+#     features = sp.vstack((allx, tx)).tolil()
+#     features[test_idx_reorder, :] = features[test_idx_range, :]
+#     features = normalize_features(features)
+#     adj = nx.adjacency_matrix(nx.from_dict_of_lists(graph))
+#     adj = adj + sp.eye(adj.shape[0])
+#     adj_norm = normalize_sparse_adj(adj)
+
+#     labels = np.vstack((ally, ty))
+#     labels[test_idx_reorder, :] = labels[test_idx_range, :]
+#     labels = np.argmax(labels, axis=1)
+
+#     idx_test = test_idx_range.tolist()
+#     idx_train = range(len(y))
+#     idx_val = range(len(y), len(y)+500)
+
+#     train_mask = sample_mask(idx_train, labels.shape[0])
+#     val_mask = sample_mask(idx_val, labels.shape[0])
+#     test_mask = sample_mask(idx_test, labels.shape[0])
+
+#     y_train = np.zeros(labels.shape)
+#     y_val = np.zeros(labels.shape)
+#     y_test = np.zeros(labels.shape)
+#     y_train[train_mask] = labels[train_mask]
+#     y_val[val_mask] = labels[val_mask]
+#     y_test[test_mask] = labels[test_mask]
+
+#     return adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask
+
+
+def load_data(data_dir, dataset_str, knn_size=None, epsilon=None, knn_metric='cosine', prob_del_edge=None, prob_add_edge=None, seed=1234, sparse_init_adj=False):
     """
     Loads input data from gcn/data directory
 
@@ -64,41 +135,79 @@ def load_data(data_dir, dataset_str, knn_size=None, epsilon=None, knn_metric='co
     :return: All data input files loaded (as well the training/test data).
     """
     assert (knn_size is None) or (epsilon is None)
-    names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
-    objects = []
-    for i in range(len(names)):
-        with open(os.path.join(data_dir, 'ind.{}.{}'.format(dataset_str, names[i])), 'rb') as f:
-            if sys.version_info > (3, 0):
-                objects.append(pkl.load(f, encoding='latin1'))
-            else:
-                objects.append(pkl.load(f))
 
-    x, y, tx, ty, allx, ally, graph = tuple(objects)
-    test_idx_reorder = parse_index_file(os.path.join(data_dir, 'ind.{}.test.index'.format(dataset_str)))
-    test_idx_range = np.sort(test_idx_reorder)
+    if dataset_str.startswith('ogbn'): # Open Graph Benchmark datasets
+        from ogb.nodeproppred import NodePropPredDataset
 
-    if dataset_str == 'citeseer':
-        # Fix citeseer dataset (there are some isolated nodes in the graph)
-        # Find isolated nodes, add them as zero-vecs into the right position
-        test_idx_range_full = range(min(test_idx_reorder), max(test_idx_reorder)+1)
-        tx_extended = sp.lil_matrix((len(test_idx_range_full), x.shape[1]))
-        tx_extended[test_idx_range-min(test_idx_range), :] = tx
-        tx = tx_extended
-        ty_extended = np.zeros((len(test_idx_range_full), y.shape[1]))
-        ty_extended[test_idx_range-min(test_idx_range), :] = ty
-        ty = ty_extended
+        dataset = NodePropPredDataset(name=dataset_str)
 
-    raw_features = sp.vstack((allx, tx)).tolil()
-    raw_features[test_idx_reorder, :] = raw_features[test_idx_range, :]
-    features = normalize_features(raw_features)
-    raw_features = torch.Tensor(raw_features.todense())
-    features = torch.Tensor(features.todense())
+        split_idx = dataset.get_idx_split()
+        idx_train, idx_val, idx_test = torch.LongTensor(split_idx["train"]), torch.LongTensor(split_idx["valid"]), torch.LongTensor(split_idx["test"])
+
+        data = dataset[0] # This dataset has only one graph
+        features = torch.Tensor(data[0]['node_feat'])
+        labels = torch.LongTensor(data[1]).squeeze(-1)
+
+        edge_index = data[0]['edge_index']
+        adj = to_undirected(edge_index, num_nodes=data[0]['num_nodes'])
+        assert adj.diagonal().sum() == 0 and adj.max() <= 1 and (adj != adj.transpose()).sum() == 0
+
+
+    else: # datasets: Cora, Citeseer, PubMed
+
+        names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
+        objects = []
+        for i in range(len(names)):
+            with open(os.path.join(data_dir, 'ind.{}.{}'.format(dataset_str, names[i])), 'rb') as f:
+                if sys.version_info > (3, 0):
+                    objects.append(pkl.load(f, encoding='latin1'))
+                else:
+                    objects.append(pkl.load(f))
+
+        x, y, tx, ty, allx, ally, graph = tuple(objects)
+        test_idx_reorder = parse_index_file(os.path.join(data_dir, 'ind.{}.test.index'.format(dataset_str)))
+        test_idx_range = np.sort(test_idx_reorder)
+
+        if dataset_str == 'citeseer':
+            # Fix citeseer dataset (there are some isolated nodes in the graph)
+            # Find isolated nodes, add them as zero-vecs into the right position
+            test_idx_range_full = range(min(test_idx_reorder), max(test_idx_reorder)+1)
+            tx_extended = sp.lil_matrix((len(test_idx_range_full), x.shape[1]))
+            tx_extended[test_idx_range-min(test_idx_range), :] = tx
+            tx = tx_extended
+            ty_extended = np.zeros((len(test_idx_range_full), y.shape[1]))
+            ty_extended[test_idx_range-min(test_idx_range), :] = ty
+            ty = ty_extended
+
+        raw_features = sp.vstack((allx, tx)).tolil()
+        raw_features[test_idx_reorder, :] = raw_features[test_idx_range, :]
+        features = normalize_features(raw_features)
+        raw_features = torch.Tensor(raw_features.todense())
+        features = torch.Tensor(features.todense())
+
+        adj = nx.adjacency_matrix(nx.from_dict_of_lists(graph))
+
+
+        labels = np.vstack((ally, ty))
+        labels[test_idx_reorder, :] = labels[test_idx_range, :]
+        # labels = torch.LongTensor(np.where(labels)[1])
+        labels = torch.LongTensor(np.argmax(labels, axis=1))
+
+        idx_train = torch.LongTensor(range(len(y)))
+        idx_val = torch.LongTensor(range(len(y), len(y) + 500))
+        idx_test = torch.LongTensor(test_idx_range.tolist())
+
+
 
     if not knn_size is None:
         print('[ Using KNN-graph as input graph: {} ]'.format(knn_size))
         adj = kneighbors_graph(features, knn_size, metric=knn_metric, include_self=True)
         adj_norm = normalize_sparse_adj(adj)
-        adj_norm = torch.Tensor(adj_norm.todense())
+        if sparse_init_adj:
+            adj_norm = sparse_mx_to_torch_sparse_tensor(adj_norm)
+        else:
+            adj_norm = torch.Tensor(adj_norm.todense())
+
     elif not epsilon is None:
         print('[ Using Epsilon-graph as input graph: {} ]'.format(epsilon))
         feature_norm = features.div(torch.norm(features, p=2, dim=-1, keepdim=True))
@@ -106,34 +215,39 @@ def load_data(data_dir, dataset_str, knn_size=None, epsilon=None, knn_metric='co
         mask = (attention > epsilon).float()
         adj = attention * mask
         adj = (adj > 0).float()
-        adj_norm = normalize_adj(adj)
+        adj = sp.csr_matrix(adj)
+        adj_norm = normalize_sparse_adj(adj)
+        if sparse_init_adj:
+            adj_norm = sparse_mx_to_torch_sparse_tensor(adj_norm)
+        else:
+            adj_norm = torch.Tensor(adj_norm.todense())
+
     else:
         print('[ Using ground-truth input graph ]')
-        adj = nx.adjacency_matrix(nx.from_dict_of_lists(graph))
 
         if prob_del_edge is not None:
             adj = graph_delete_connections(prob_del_edge, seed, adj.toarray(), enforce_connected=False)
             adj = adj + np.eye(adj.shape[0])
             adj_norm = normalize_adj(torch.Tensor(adj))
+            adj_norm = sp.csr_matrix(adj_norm)
+
 
         elif prob_add_edge is not None:
             adj = graph_add_connections(prob_add_edge, seed, adj.toarray(), enforce_connected=False)
             adj = adj + np.eye(adj.shape[0])
             adj_norm = normalize_adj(torch.Tensor(adj))
+            adj_norm = sp.csr_matrix(adj_norm)
 
         else:
             adj = adj + sp.eye(adj.shape[0])
             adj_norm = normalize_sparse_adj(adj)
+
+
+        if sparse_init_adj:
+            adj_norm = sparse_mx_to_torch_sparse_tensor(adj_norm)
+        else:
             adj_norm = torch.Tensor(adj_norm.todense())
 
-
-    labels = np.vstack((ally, ty))
-    labels[test_idx_reorder, :] = labels[test_idx_range, :]
-    labels = torch.LongTensor(np.argmax(labels, axis=1))
-
-    idx_train = torch.LongTensor(range(len(y)))
-    idx_val = torch.LongTensor(range(len(y), len(y) + 500))
-    idx_test = torch.LongTensor(test_idx_range.tolist())
     return adj_norm, features, labels, idx_train, idx_val, idx_test
 
 
@@ -184,3 +298,4 @@ def graph_add_connections(prob_add, seed, adj, enforce_connected=False):
         print('# ADDED EDGES: ', add_edges)
     add_adj = (add_adj > 0).astype(float)
     return add_adj
+

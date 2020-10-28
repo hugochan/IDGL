@@ -7,7 +7,7 @@ pretrained: null
 task_type: 'regression'
 
 # Output
-out_dir: '../out/mrd/idgl'
+out_dir: '../out/mrd/idgl_anchor'
 
 
 
@@ -18,7 +18,12 @@ seed: 1234
 # Model architecture
 model_name: 'TextGraphRegression'
 
-hidden_size: 64 # 64
+# Scalable graph learning
+scalable_run: True
+ratio_anchors: 0.4 # 0.4!
+
+
+hidden_size: 64 # 64!
 
 
 # Bert configure
@@ -28,7 +33,7 @@ use_bert: False
 
 # Regularization
 dropout: 0.5
-gl_dropout: 0.01 # IGL: 0.01!
+gl_dropout: 0. # IGL: 0!
 
 
 # Graph neural networks
@@ -38,21 +43,21 @@ graph_type: 'dynamic'
 graph_learn: True
 graph_metric_type: 'weighted_cosine' # weighted_cosine, kernel, attention, gat_attention, cosine
 graph_skip_conn: 0.5 # IGL: 0.5 !
-update_adj_ratio: 0.9 # IGL: 0.9 !
+update_adj_ratio: 0.75 # IGL: 0.75!
 graph_include_self: False # cosine-KNN-GCN: False
 graph_learn_regularization: True
 smoothness_ratio: 0.2 # IGL: 0.2!
 degree_ratio: 0 # IGL: 0!
-sparsity_ratio: 0.1 # IGL: 0.1!
+sparsity_ratio: 0 # IGL: 0!
 graph_learn_ratio: 0 # 0
-input_graph_knn_size: 350 # weighted_cosine: IGL: 350 !
+input_graph_knn_size: 400 # weighted_cosine: IGL: 400!
 graph_learn_hidden_size: 70 # kernel: 90, attention: 70
-graph_learn_epsilon: 0.4 # IGL: 0.4!
+graph_learn_epsilon: 0.7 # IGL: 0.7!
 graph_learn_topk: null #
 # graph_learn_hidden_size2: 70 # kernel: 90, attention: 70
 # graph_learn_epsilon2: 0 # weighted_cosine: 0
 # graph_learn_topk2: null # attn-GCN: 140: 64.1, kernel-GCN: 100
-graph_learn_num_pers: 5 # IGL: 5!
+graph_learn_num_pers: 4 # IGL: 4!
 graph_hops: 2
 
 # GAT only
@@ -71,7 +76,7 @@ grad_accumulated_steps: 1
 eary_stop_metric: 'r2' # r2
 pretrain_epoch: 0 #
 max_iter: 10
-eps_adj: 4e-2 # IGL: 4e-2!
+eps_adj: 3.e-2 # IGL: 3.e-2!
 
 
 # Text data only

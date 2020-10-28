@@ -1,5 +1,13 @@
+'''
+Created on Nov, 2018
+
+@author: hugo
+
+'''
 import yaml
 import numpy as np
+import networkx as nx
+from collections import defaultdict
 import scipy.sparse as sp
 import torch
 import torch.nn as nn
@@ -35,9 +43,10 @@ def to_cuda(x, device=None):
     return x
 
 def create_mask(x, N, device=None):
-    x = x.data
-    mask = np.zeros((x.size(0), N))
-    for i in range(x.size(0)):
+    if isinstance(x, torch.Tensor):
+        x = x.data
+    mask = np.zeros((len(x), N))
+    for i in range(len(x)):
         mask[i, :x[i]] = 1
     return to_cuda(torch.Tensor(mask), device)
 
@@ -59,6 +68,12 @@ def batch_normalize_adj(mx, mask=None):
     """Row-normalize matrix: symmetric normalized Laplacian"""
     # mx: shape: [batch_size, N, N]
 
+    # strategy 1)
+    # rowsum = mx.sum(1)
+    # r_inv_sqrt = torch.pow(rowsum, -0.5)
+    # r_inv_sqrt[torch.isinf(r_inv_sqrt)] = 0. # I got this error: copy_if failed to synchronize: device-side assert triggered
+
+    # strategy 2)
     rowsum = torch.clamp(mx.sum(1), min=VERY_SMALL_NUMBER)
     r_inv_sqrt = torch.pow(rowsum, -0.5)
     if mask is not None:
@@ -78,3 +93,25 @@ def normalize_sparse_adj(mx):
     r_inv_sqrt[np.isinf(r_inv_sqrt)] = 0.
     r_mat_inv_sqrt = sp.diags(r_inv_sqrt)
     return mx.dot(r_mat_inv_sqrt).transpose().dot(r_mat_inv_sqrt)
+
+def to_undirected(edge_index, num_nodes=None):
+    if num_nodes is None:
+        num_nodes = edge_index.max() + 1
+    else:
+        num_nodes = max(num_nodes, edge_index.max() + 1)
+
+    row, col = edge_index
+    data = np.ones(edge_index.shape[1])
+    adj = sp.csr_matrix((data, (row, col)), shape=(num_nodes, num_nodes))
+    adj = (adj + adj.transpose()) > 0
+    return adj.astype(np.float64)
+
+
+def sparse_mx_to_torch_sparse_tensor(sparse_mx):
+    """Convert a scipy sparse matrix to a torch sparse tensor."""
+    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    indices = torch.from_numpy(
+        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
+    values = torch.from_numpy(sparse_mx.data)
+    shape = torch.Size(sparse_mx.shape)
+    return torch.sparse.FloatTensor(indices, values, shape)

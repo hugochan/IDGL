@@ -177,6 +177,7 @@ class UCI(ConfigData):
             adj = attention * mask
             adj = (adj > 0).float()
             adj_norm = normalize_adj(adj)
+            # adj_norm = adj / torch.clamp(torch.sum(adj, dim=-1, keepdim=True), min=VERY_SMALL_NUMBER)
         else:
             adj_norm = None
 

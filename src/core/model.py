@@ -54,6 +54,8 @@ class Model(object):
             self.score_func = None
             self.metric_name = None
 
+
+
         if self.config['pretrained']:
             self.init_saved_network(self.config['pretrained'])
         else:
@@ -81,6 +83,11 @@ class Model(object):
         print('[ Loading saved model %s ]' % fname)
         saved_params = torch.load(fname, map_location=lambda storage, loc: storage)
         self.state_dict = saved_params['state_dict']
+        # for k in _ARGUMENTS:
+        #     if saved_params['config'][k] != self.config[k]:
+        #         print('Overwrite {}: {} -> {}'.format(k, self.config[k], saved_params['config'][k]))
+        #         self.config[k] = saved_params['config'][k]
+
         if self.config['data_type'] == 'text':
             w_embedding = self._init_embedding(len(self.vocab_model.word_vocab), self.config['word_embed_dim'])
             self.network = self.net_module(self.config, w_embedding, self.vocab_model.word_vocab)
@@ -208,24 +215,6 @@ def train_batch(batch, network, vocab, criterion, forcing_ratio, rl_ratio, confi
                             batch['oov_dict'], network_out.decoded_tokens)[0]
 
     return loss, loss_value, metrics
-
-
-
-# Development phase
-def dev_batch(batch, network, vocab, criterion=None, show_cover_loss=False):
-  """Test the `network` on the `batch`, return the ROUGE score and the loss."""
-  network.train(False)
-  decoded_batch, out = eval_decode_batch(batch, network, vocab, criterion=criterion, show_cover_loss=show_cover_loss)
-  metrics = evaluate_predictions(batch['target_src'], decoded_batch)
-  return decoded_batch, out.loss_value, metrics
-
-
-# Testing phase
-def test_batch(batch, network, vocab, config):
-    network.train(False)
-    decoded_batch = beam_search(batch, network, vocab, config)
-    metrics = evaluate_predictions(batch['target_src'], decoded_batch)
-    return decoded_batch, metrics
 
 def accuracy(labels, output):
     preds = output.max(1)[1].type_as(labels)

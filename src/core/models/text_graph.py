@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..layers.graphlearn import GraphLearner, get_binarized_kneighbors_graph
+from ..layers.scalable_graphlearn import AnchorGraphLearner
+from ..layers.anchor import AnchorGCN
 from ..layers.common import dropout, EncoderRNN
 from ..layers.gnn import GCN, GAT
 from ..utils.generic_utils import to_cuda, create_mask, batch_normalize_adj
@@ -47,23 +49,27 @@ class TextGraphRegression(nn.Module):
                               rnn_dropout=self.rnn_dropout, device=self.device)
 
         self.linear_out = nn.Linear(hidden_size, 1, bias=False)
-
+        self.scalable_run = config.get('scalable_run', False)
 
 
         if not config.get('no_gnn', False):
             print('[ Using TextGNN ]')
             if self.graph_module == 'gcn':
-                self.encoder = GCN(nfeat=hidden_size,
+                gcn_module = AnchorGCN if self.scalable_run else GCN
+                self.encoder = gcn_module(nfeat=hidden_size,
                                     nhid=hidden_size,
                                     nclass=hidden_size,
-                                    dropout=self.dropout)
+                                    graph_hops=config.get('graph_hops', 2),
+                                    dropout=self.dropout,
+                                    batch_norm=config.get('batch_norm', False))
 
             else:
                 raise RuntimeError('Unknown graph_module: {}'.format(self.graph_module))
 
 
             if self.graph_learn:
-                self.graph_learner = GraphLearner(word_embed_dim, config['graph_learn_hidden_size'],
+                graph_learn_fun = AnchorGraphLearner if self.scalable_run else GraphLearner
+                self.graph_learner = graph_learn_fun(word_embed_dim, config['graph_learn_hidden_size'],
                                                 topk=config['graph_learn_topk'],
                                                 epsilon=config['graph_learn_epsilon'],
                                                 num_pers=config['graph_learn_num_pers'],
@@ -71,7 +77,7 @@ class TextGraphRegression(nn.Module):
                                                 device=self.device)
 
 
-                self.graph_learner2 = GraphLearner(hidden_size,
+                self.graph_learner2 = graph_learn_fun(hidden_size,
                                                 config.get('graph_learn_hidden_size2', config['graph_learn_hidden_size']),
                                                 topk=config.get('graph_learn_topk2', config['graph_learn_topk']),
                                                 epsilon=config.get('graph_learn_epsilon2', config['graph_learn_epsilon']),
@@ -101,28 +107,38 @@ class TextGraphRegression(nn.Module):
         return torch.sigmoid(output)
 
 
-    def learn_graph(self, graph_learner, node_features, graph_skip_conn, node_mask=None, graph_include_self=False, init_adj=None):
+    def learn_graph(self, graph_learner, node_features, graph_skip_conn=None, node_mask=None, anchor_mask=None, graph_include_self=False, init_adj=None, anchor_features=None):
         if self.graph_learn:
-            raw_adj = graph_learner(node_features, node_mask)
+            if self.scalable_run:
+                node_anchor_adj = graph_learner(node_features, anchor_features, node_mask, anchor_mask)
+                return node_anchor_adj
 
-            if self.graph_metric_type in ('kernel', 'weighted_cosine'):
-                assert raw_adj.min().item() >= 0
-                adj = raw_adj / torch.clamp(torch.sum(raw_adj, dim=-1, keepdim=True), min=VERY_SMALL_NUMBER)
-            elif self.graph_metric_type == 'cosine':
-                adj = (raw_adj > 0).float()
-                adj = normalize_adj(adj)
             else:
-                adj = torch.softmax(raw_adj, dim=-1)
+                raw_adj = graph_learner(node_features, node_mask)
 
-            if graph_skip_conn in (0, None):
-                if graph_include_self:
-                    adj = adj + to_cuda(torch.eye(adj.size(0)), self.device)
-            else:
-                adj = graph_skip_conn * init_adj + (1 - graph_skip_conn) * adj
+                if self.graph_metric_type in ('kernel', 'weighted_cosine'):
+                    assert raw_adj.min().item() >= 0
+                    adj = raw_adj / torch.clamp(torch.sum(raw_adj, dim=-1, keepdim=True), min=VERY_SMALL_NUMBER)
+                elif self.graph_metric_type == 'cosine':
+                    adj = (raw_adj > 0).float()
+                    adj = normalize_adj(adj)
+                else:
+                    adj = torch.softmax(raw_adj, dim=-1)
+
+                if graph_skip_conn in (0, None):
+                    if graph_include_self:
+                        adj = adj + to_cuda(torch.eye(adj.size(0)), self.device)
+                else:
+                    adj = graph_skip_conn * init_adj + (1 - graph_skip_conn) * adj
+
+                return raw_adj, adj
+
         else:
             raw_adj = None
             adj = init_adj
-        return raw_adj, adj
+
+            return raw_adj, adj
+
 
     def compute_output(self, node_vec, node_mask=None):
         graph_vec = self.graph_maxpool(node_vec.transpose(-1, -2), node_mask=node_mask)
@@ -193,6 +209,7 @@ class TextGraphClf(nn.Module):
 
         self.linear_out = nn.Linear(hidden_size, nclass, bias=False)
 
+        self.scalable_run = config.get('scalable_run', False)
 
 
         if not config.get('no_gnn', False):
@@ -200,17 +217,21 @@ class TextGraphClf(nn.Module):
             # self.linear_max = nn.Linear(hidden_size, nclass, bias=False)
 
             if self.graph_module == 'gcn':
-                self.encoder = GCN(nfeat=hidden_size,
+                gcn_module = AnchorGCN if self.scalable_run else GCN
+                self.encoder = gcn_module(nfeat=hidden_size,
                                     nhid=hidden_size,
                                     nclass=hidden_size,
-                                    dropout=self.dropout)
+                                    graph_hops=config.get('graph_hops', 2),
+                                    dropout=self.dropout,
+                                    batch_norm=config.get('batch_norm', False))
 
             else:
                 raise RuntimeError('Unknown graph_module: {}'.format(self.graph_module))
 
 
             if self.graph_learn:
-                self.graph_learner = GraphLearner(word_embed_dim, config['graph_learn_hidden_size'],
+                graph_learn_fun = AnchorGraphLearner if self.scalable_run else GraphLearner
+                self.graph_learner = graph_learn_fun(word_embed_dim, config['graph_learn_hidden_size'],
                                                 topk=config['graph_learn_topk'],
                                                 epsilon=config['graph_learn_epsilon'],
                                                 num_pers=config['graph_learn_num_pers'],
@@ -218,7 +239,7 @@ class TextGraphClf(nn.Module):
                                                 device=self.device)
 
 
-                self.graph_learner2 = GraphLearner(hidden_size,
+                self.graph_learner2 = graph_learn_fun(hidden_size,
                                                 config.get('graph_learn_hidden_size2', config['graph_learn_hidden_size']),
                                                 topk=config.get('graph_learn_topk2', config['graph_learn_topk']),
                                                 epsilon=config.get('graph_learn_epsilon2', config['graph_learn_epsilon']),
@@ -249,28 +270,37 @@ class TextGraphClf(nn.Module):
         return output
 
 
-    def learn_graph(self, graph_learner, node_features, graph_skip_conn, node_mask=None, graph_include_self=False, init_adj=None):
+    def learn_graph(self, graph_learner, node_features, graph_skip_conn=None, node_mask=None, anchor_mask=None, graph_include_self=False, init_adj=None, anchor_features=None):
         if self.graph_learn:
-            raw_adj = graph_learner(node_features, node_mask)
+            if self.scalable_run:
+                node_anchor_adj = graph_learner(node_features, anchor_features, node_mask, anchor_mask)
+                return node_anchor_adj
 
-            if self.graph_metric_type in ('kernel', 'weighted_cosine'):
-                assert raw_adj.min().item() >= 0
-                adj = raw_adj / torch.clamp(torch.sum(raw_adj, dim=-1, keepdim=True), min=VERY_SMALL_NUMBER)
-            elif self.graph_metric_type == 'cosine':
-                adj = (raw_adj > 0).float()
-                adj = normalize_adj(adj)
             else:
-                adj = torch.softmax(raw_adj, dim=-1)
+                raw_adj = graph_learner(node_features, node_mask)
 
-            if graph_skip_conn in (0, None):
-                if graph_include_self:
-                    adj = adj + to_cuda(torch.eye(adj.size(0)), self.device)
-            else:
-                adj = graph_skip_conn * init_adj + (1 - graph_skip_conn) * adj
+                if self.graph_metric_type in ('kernel', 'weighted_cosine'):
+                    assert raw_adj.min().item() >= 0
+                    adj = raw_adj / torch.clamp(torch.sum(raw_adj, dim=-1, keepdim=True), min=VERY_SMALL_NUMBER)
+                elif self.graph_metric_type == 'cosine':
+                    adj = (raw_adj > 0).float()
+                    adj = normalize_adj(adj)
+                else:
+                    adj = torch.softmax(raw_adj, dim=-1)
+
+                if graph_skip_conn in (0, None):
+                    if graph_include_self:
+                        adj = adj + to_cuda(torch.eye(adj.size(0)), self.device)
+                else:
+                    adj = graph_skip_conn * init_adj + (1 - graph_skip_conn) * adj
+
+                return raw_adj, adj
+
         else:
             raw_adj = None
             adj = init_adj
-        return raw_adj, adj
+
+            return raw_adj, adj
 
     def compute_output(self, node_vec, node_mask=None):
         graph_vec = self.graph_maxpool(node_vec.transpose(-1, -2), node_mask=node_mask)

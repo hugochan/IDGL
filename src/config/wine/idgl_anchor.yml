@@ -5,7 +5,7 @@ pretrained: null
 task_type: 'classification'
 
 # Output
-out_dir: '../out/wine/idgl'
+out_dir: '../out/wine/idgl_anchor'
 
 
 
@@ -17,6 +17,12 @@ n_val: 20
 # Model architecture
 model_name: 'GraphClf'
 
+# Scalable graph learning
+scalable_run: True
+num_anchors: 200 # 200!
+
+
+
 hidden_size: 16
 
 
@@ -26,8 +32,8 @@ use_bert: False
 
 
 # Regularization
-dropout: 0.5 # 0.5
-gl_dropout: 0.5 # 0.5
+dropout: 0.5 # 0.5!
+gl_dropout: 0.5 # 0.5!
 
 
 # Graph neural networks
@@ -37,21 +43,21 @@ graph_type: 'dynamic'
 graph_learn: True
 graph_metric_type: 'weighted_cosine' # kernel, attention, gat_attention, cosine
 graph_include_self: False
-graph_skip_conn: 0.8 # kernel: 0.8, 0.9, weighted_cosine: 0.8, IL: 0.8
-update_adj_ratio: 0.7 # 0.7
+graph_skip_conn: 0.7 # kernel: 0.8, 0.9, weighted_cosine: 0.8, IL: 0.7!
+update_adj_ratio: 0.7 # 0.7!
 graph_learn_regularization: True
-smoothness_ratio: 0.1 # kernel: 0.5, weighted_cosine: 0.1
-degree_ratio: 0.1 # kernel: 0.05, weighted_cosine: 0.1
-sparsity_ratio: 0.3 # kernel: 0, weighted_cosine: 0.3
+smoothness_ratio: 0.1 # kernel: 0.5, weighted_cosine: 0.1!
+degree_ratio: 0.1 # kernel: 0.05, weighted_cosine: 0.1!
+sparsity_ratio: 0.3 # kernel: 0, weighted_cosine: 0.3!
 graph_learn_ratio: 0 # kernel: 0, weighted_cosine: 0
-input_graph_knn_size: 20 # cosine-KNN-GCN: 20, weighted_cosine: 20
-graph_learn_hidden_size: 20 # kernel: 20, attention: 20
-graph_learn_epsilon: 0.75 # kernel-GCN: 0.8, weighted_cosine: 0.75
+input_graph_knn_size: 20 # cosine-KNN-GCN: 20, weighted_cosine: 20!
+graph_learn_hidden_size: null # kernel: 20, attention: 20
+graph_learn_epsilon: 0.75 # kernel-GCN: 0.8, weighted_cosine: 0.75!
 graph_learn_topk: null # kernel-GCN: 25
 # graph_learn_hidden_size2: 20 # kernel: 20
 # graph_learn_epsilon2: 0.75 # kernel-GCN: 0.8, weighted_cosine: 0.75
 # graph_learn_topk2: null
-graph_learn_num_pers: 1 # weighted_cosine: 1, attention: 1, gat_attention: 8
+graph_learn_num_pers: 1 # weighted_cosine: 1!, attention: 1, gat_attention: 8
 graph_hops: 2
 
 # GAT only
@@ -68,9 +74,9 @@ lr_reduce_factor: 0.5 # GCN: 0.5
 grad_clipping: null
 grad_accumulated_steps: 1
 eary_stop_metric: 'nloss' # negative loss
-pretrain_epoch: 50 # 50
+pretrain_epoch: 50 # 50!
 max_iter: 10 # 10
-eps_adj: 1e-3 # 1e-3
+eps_adj: 1e-3 # 1e-3!
 
 
 # note: RL is not used

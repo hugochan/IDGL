@@ -16,6 +16,8 @@ from .utils.data_utils import prepare_datasets, DataStream, vectorize_input
 from .utils import Timer, DummyLogger, AverageMeter
 from .utils import constants as Constants
 from .layers.common import dropout
+from .layers.anchor import sample_anchors, batch_sample_anchors, batch_select_from_tensor, compute_anchor_adj
+
 
 
 class ModelHandler(object):
@@ -72,7 +74,7 @@ class ModelHandler(object):
 
 
             self._n_test_examples = datasets['idx_test'].shape[0]
-            self.run_epoch = self._run_whole_epoch
+            self.run_epoch = self._scalable_run_whole_epoch if config.get('scalable_run', False) else self._run_whole_epoch
 
             self.train_loader = datasets
             self.dev_loader = datasets
@@ -142,8 +144,8 @@ class ModelHandler(object):
                 format_str = "\n>>> Train Epoch: [{} / {}]".format(self._epoch, self.config['max_epochs'])
                 print(format_str)
                 self.logger.write_to_file(format_str)
-            self.run_epoch(self.train_loader, training=True, verbose=self.config['verbose'])
 
+            self.run_epoch(self.train_loader, training=True, verbose=self.config['verbose'])
             if self._epoch % self.config['print_every_epochs'] == 0:
                 format_str = "Training Epoch {} -- Loss: {:0.5f}".format(self._epoch, self._train_loss.mean())
                 format_str += self.metric_to_str(self._train_metrics)
@@ -297,7 +299,6 @@ class ModelHandler(object):
         return res
 
 
-
     def batch_IGL_stop(self, x_batch, step, training, out_predictions=False):
         '''Iterative graph learning: batch training, batch stopping'''
         mode = "train" if training else ("test" if self.is_test else "dev")
@@ -318,19 +319,24 @@ class ModelHandler(object):
         node_mask = context_mask
 
         cur_raw_adj, cur_adj = network.learn_graph(network.graph_learner, raw_node_vec, network.graph_skip_conn, node_mask=node_mask, graph_include_self=network.graph_include_self, init_adj=init_adj)
-        node_vec = torch.relu(network.encoder.graph_encoder1(init_node_vec, cur_adj))
+        node_vec = torch.relu(network.encoder.graph_encoders[0](init_node_vec, cur_adj))
         node_vec = F.dropout(node_vec, network.dropout, training=network.training)
-        first_raw_adj, first_adj = cur_raw_adj, cur_adj
 
+        # Add mid GNN layers
+        for encoder in network.encoder.graph_encoders[1:-1]:
+            node_vec = torch.relu(encoder(node_vec, cur_adj))
+            node_vec = F.dropout(node_vec, network.dropout, training=network.training)
 
         # BP to update weights
-        output = network.encoder.graph_encoder2(node_vec, cur_adj)
+        output = network.encoder.graph_encoders[-1](node_vec, cur_adj)
         output = network.compute_output(output, node_mask=node_mask)
         loss1 = self.model.criterion(output, targets)
         score = self.model.score_func(targets.cpu(), output.detach().cpu())
 
         if self.config['graph_learn'] and self.config['graph_learn_regularization']:
             loss1 += self.add_batch_graph_loss(cur_raw_adj, raw_node_vec)
+
+        first_raw_adj, first_adj = cur_raw_adj, cur_adj
 
 
         if not mode == 'test':
@@ -357,7 +363,7 @@ class ModelHandler(object):
         # Indicate either an example is in onging state (i.e., 1) or stopping state (i.e., 0)
         batch_stop_indicators = to_cuda(torch.ones(x_batch['batch_size'], dtype=torch.uint8), self.device)
         batch_all_outputs = []
-        while (iter_ == 0 or torch.sum(batch_stop_indicators).item() > 0) and iter_ < max_iter_:
+        while self.config['graph_learn'] and (iter_ == 0 or torch.sum(batch_stop_indicators).item() > 0) and iter_ < max_iter_:
             iter_ += 1
             batch_last_iters += batch_stop_indicators
             pre_adj = cur_adj
@@ -369,12 +375,16 @@ class ModelHandler(object):
             if update_adj_ratio is not None:
                 cur_adj = update_adj_ratio * cur_adj + (1 - update_adj_ratio) * first_adj
 
-            node_vec = torch.relu(network.encoder.graph_encoder1(init_node_vec, cur_adj))
+            node_vec = torch.relu(network.encoder.graph_encoders[0](init_node_vec, cur_adj))
             node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
 
+            # Add mid GNN layers
+            for encoder in network.encoder.graph_encoders[1:-1]:
+                node_vec = torch.relu(encoder(node_vec, cur_adj))
+                node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
 
             # BP to update weights
-            tmp_output = network.encoder.graph_encoder2(node_vec, cur_adj)
+            tmp_output = network.encoder.graph_encoders[-1](node_vec, cur_adj)
             tmp_output = network.compute_output(tmp_output, node_mask=node_mask)
             batch_all_outputs.append(tmp_output.unsqueeze(1))
 
@@ -430,6 +440,214 @@ class ModelHandler(object):
                 self.model.optimizer.zero_grad()
         return res
 
+
+
+    def scalable_batch_IGL_stop(self, x_batch, step, training, out_predictions=False):
+        '''Iterative graph learning: batch training, batch stopping'''
+        mode = "train" if training else ("test" if self.is_test else "dev")
+        network = self.model.network
+        network.train(training)
+
+        context, context_lens, targets = x_batch['context'], x_batch['context_lens'], x_batch['targets']
+        context2 = x_batch.get('context2', None)
+        context2_lens = x_batch.get('context2_lens', None)
+
+        # Prepare init node embedding, init adj
+        raw_context_vec, context_vec, context_mask, init_adj = network.prepare_init_graph(context, context_lens)
+
+
+        # Init
+        raw_node_vec = raw_context_vec # word embedding
+        init_node_vec = context_vec # hidden embedding
+        node_mask = context_mask
+
+
+        # Randomly sample s anchor nodes
+        init_anchor_vec, anchor_mask, sampled_node_idx, max_num_anchors = batch_sample_anchors(init_node_vec, network.config.get('ratio_anchors', 0.2), node_mask=node_mask, device=self.device)
+        raw_anchor_vec = batch_select_from_tensor(raw_node_vec, sampled_node_idx, max_num_anchors, self.device)
+
+        # Compute n x s node-anchor relationship matrix
+        cur_node_anchor_adj = network.learn_graph(network.graph_learner, raw_node_vec, anchor_features=raw_anchor_vec, node_mask=node_mask, anchor_mask=anchor_mask)
+
+        # Compute s x s anchor graph
+        cur_anchor_adj = compute_anchor_adj(cur_node_anchor_adj, anchor_mask=anchor_mask)
+
+
+        # Update node embeddings via node-anchor-node message passing
+        init_agg_vec = network.encoder.graph_encoders[0](init_node_vec, init_adj, anchor_mp=False, batch_norm=False)
+        node_vec = (1 - network.graph_skip_conn) * network.encoder.graph_encoders[0](init_node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False) + \
+                    network.graph_skip_conn * init_agg_vec
+
+        if network.encoder.graph_encoders[0].bn is not None:
+            node_vec = network.encoder.graph_encoders[0].compute_bn(node_vec)
+
+        node_vec = torch.relu(node_vec)
+        node_vec = F.dropout(node_vec, network.dropout, training=network.training)
+        anchor_vec = batch_select_from_tensor(node_vec, sampled_node_idx, max_num_anchors, self.device)
+
+
+        first_node_anchor_adj, first_anchor_adj = cur_node_anchor_adj, cur_anchor_adj
+        first_init_agg_vec = network.encoder.graph_encoders[0](init_node_vec, first_node_anchor_adj, anchor_mp=True, batch_norm=False)
+
+
+        # Add mid GNN layers
+        for encoder in network.encoder.graph_encoders[1:-1]:
+            node_vec = (1 - network.graph_skip_conn) * encoder(node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False) + \
+                        network.graph_skip_conn * encoder(node_vec, init_adj, anchor_mp=False, batch_norm=False)
+
+            if encoder.bn is not None:
+                node_vec = encoder.compute_bn(node_vec)
+
+            node_vec = torch.relu(node_vec)
+            node_vec = F.dropout(node_vec, network.dropout, training=network.training)
+            anchor_vec = batch_select_from_tensor(node_vec, sampled_node_idx, max_num_anchors, self.device)
+
+
+        # Compute output via node-anchor-node message passing
+        output = (1 - network.graph_skip_conn) * network.encoder.graph_encoders[-1](node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False) + \
+                    network.graph_skip_conn * network.encoder.graph_encoders[-1](node_vec, init_adj, anchor_mp=False, batch_norm=False)
+        output = network.compute_output(output, node_mask=node_mask)
+        loss1 = self.model.criterion(output, targets)
+        score = self.model.score_func(targets.cpu(), output.detach().cpu())
+
+        if self.config['graph_learn'] and self.config['graph_learn_regularization']:
+            loss1 += self.add_batch_graph_loss(cur_anchor_adj, raw_anchor_vec)
+
+
+        if not mode == 'test':
+            if self._epoch > self.config.get('pretrain_epoch', 0):
+                max_iter_ = self.config.get('max_iter', 10) # Fine-tuning
+                if self._epoch == self.config.get('pretrain_epoch', 0) + 1:
+                    for k in self._dev_metrics:
+                        self._best_metrics[k] = -float('inf')
+
+            else:
+                max_iter_ = 0 # Pretraining
+        else:
+            max_iter_ = self.config.get('max_iter', 10)
+
+
+        eps_adj = float(self.config.get('eps_adj', 0)) if training else float(self.config.get('test_eps_adj', self.config.get('eps_adj', 0)))
+        pre_node_anchor_adj = cur_node_anchor_adj
+
+        loss = 0
+        iter_ = 0
+        # Indicate the last iteration number for each example
+        batch_last_iters = to_cuda(torch.zeros(x_batch['batch_size'], dtype=torch.uint8), self.device)
+        # Indicate either an example is in onging state (i.e., 1) or stopping state (i.e., 0)
+        batch_stop_indicators = to_cuda(torch.ones(x_batch['batch_size'], dtype=torch.uint8), self.device)
+        batch_all_outputs = []
+        while self.config['graph_learn'] and (iter_ == 0 or torch.sum(batch_stop_indicators).item() > 0) and iter_ < max_iter_:
+            iter_ += 1
+            batch_last_iters += batch_stop_indicators
+            pre_node_anchor_adj = cur_node_anchor_adj
+
+
+            # Compute n x s node-anchor relationship matrix
+            cur_node_anchor_adj = network.learn_graph(network.graph_learner2, node_vec, anchor_features=anchor_vec, node_mask=node_mask, anchor_mask=anchor_mask)
+
+            # Compute s x s anchor graph
+            cur_anchor_adj = compute_anchor_adj(cur_node_anchor_adj, anchor_mask=anchor_mask)
+
+            cur_agg_vec = network.encoder.graph_encoders[0](init_node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False)
+
+            update_adj_ratio = self.config.get('update_adj_ratio', None)
+            if update_adj_ratio is not None:
+                cur_agg_vec = update_adj_ratio * cur_agg_vec + (1 - update_adj_ratio) * first_init_agg_vec
+
+            node_vec = (1 - network.graph_skip_conn) * cur_agg_vec + \
+                    network.graph_skip_conn * init_agg_vec
+
+            if network.encoder.graph_encoders[0].bn is not None:
+                node_vec = network.encoder.graph_encoders[0].compute_bn(node_vec)
+
+            node_vec = torch.relu(node_vec)
+            node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
+            anchor_vec = batch_select_from_tensor(node_vec, sampled_node_idx, max_num_anchors, self.device)
+
+
+            # Add mid GNN layers
+            for encoder in network.encoder.graph_encoders[1:-1]:
+                mid_cur_agg_vec = encoder(node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False)
+                if update_adj_ratio is not None:
+                    mid_first_agg_vecc = encoder(node_vec, first_node_anchor_adj, anchor_mp=True, batch_norm=False)
+                    mid_cur_agg_vec = update_adj_ratio * mid_cur_agg_vec + (1 - update_adj_ratio) * mid_first_agg_vecc
+
+                node_vec = (1 - network.graph_skip_conn) * mid_cur_agg_vec + \
+                        network.graph_skip_conn * encoder(node_vec, init_adj, anchor_mp=False, batch_norm=False)
+
+                if encoder.bn is not None:
+                    node_vec = encoder.compute_bn(node_vec)
+
+                node_vec = torch.relu(node_vec)
+                node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
+                anchor_vec = batch_select_from_tensor(node_vec, sampled_node_idx, max_num_anchors, self.device)
+
+
+            cur_agg_vec = network.encoder.graph_encoders[-1](node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False)
+            if update_adj_ratio is not None:
+                first_agg_vec = network.encoder.graph_encoders[-1](node_vec, first_node_anchor_adj, anchor_mp=True, batch_norm=False)
+                cur_agg_vec = update_adj_ratio * cur_agg_vec + (1 - update_adj_ratio) * first_agg_vec
+
+            tmp_output = (1 - network.graph_skip_conn) * cur_agg_vec + \
+                    network.graph_skip_conn * network.encoder.graph_encoders[-1](node_vec, init_adj, anchor_mp=False, batch_norm=False)
+
+            tmp_output = network.compute_output(tmp_output, node_mask=node_mask)
+            batch_all_outputs.append(tmp_output.unsqueeze(1))
+
+            tmp_loss = self.model.criterion(tmp_output, targets, reduction='none')
+            if len(tmp_loss.shape) == 2:
+                tmp_loss = torch.mean(tmp_loss, 1)
+
+            loss += batch_stop_indicators.float() * tmp_loss
+
+            if self.config['graph_learn'] and self.config['graph_learn_regularization']:
+                loss += batch_stop_indicators.float() * self.add_batch_graph_loss(cur_anchor_adj, raw_anchor_vec, keep_batch_dim=True)
+
+            if self.config['graph_learn'] and not self.config.get('graph_learn_ratio', None) in (None, 0):
+                loss += batch_stop_indicators.float() * batch_SquaredFrobeniusNorm(cur_node_anchor_adj - pre_node_anchor_adj) * self.config.get('graph_learn_ratio')
+
+
+            tmp_stop_criteria = batch_diff(cur_node_anchor_adj, pre_node_anchor_adj, cur_node_anchor_adj) > eps_adj
+            batch_stop_indicators = batch_stop_indicators * tmp_stop_criteria
+
+
+
+        if iter_ > 0:
+            loss = torch.mean(loss / batch_last_iters.float()) + loss1
+
+            batch_all_outputs = torch.cat(batch_all_outputs, 1)
+            selected_iter_index = batch_last_iters.long().unsqueeze(-1) - 1
+
+            if len(batch_all_outputs.shape) == 3:
+                selected_iter_index = selected_iter_index.unsqueeze(-1).expand(-1, -1, batch_all_outputs.size(-1))
+                output = batch_all_outputs.gather(1, selected_iter_index).squeeze(1)
+            else:
+                output = batch_all_outputs.gather(1, selected_iter_index)
+
+            score = self.model.score_func(targets.cpu(), output.detach().cpu())
+
+
+        else:
+            loss = loss1
+
+        res = {'loss': loss.item(),
+                'metrics': {'nloss': -loss.item(), self.model.metric_name: score},
+        }
+        if out_predictions:
+            res['predictions'] = output.detach().cpu()
+
+        if training:
+            loss = loss / self.config['grad_accumulated_steps'] # Normalize our loss (if averaged)
+            loss.backward()
+
+            if (step + 1) % self.config['grad_accumulated_steps'] == 0: # Wait for several backward steps
+                self.model.clip_grad()
+                self.model.optimizer.step()
+                self.model.optimizer.zero_grad()
+        return res
+
+
     def _run_whole_epoch(self, data_loader, training=True, verbose=None, out_predictions=False):
         '''BP after all iterations'''
         mode = "train" if training else ("test" if self.is_test else "dev")
@@ -455,19 +673,45 @@ class ModelHandler(object):
         if self.config['graph_learn'] and self.config.get('max_iter', 10) > 0:
             cur_raw_adj = F.dropout(cur_raw_adj, network.config.get('feat_adj_dropout', 0), training=network.training)
         cur_adj = F.dropout(cur_adj, network.config.get('feat_adj_dropout', 0), training=network.training)
-        node_vec = torch.relu(network.encoder.graph_encoder1(init_node_vec, cur_adj))
-        node_vec = F.dropout(node_vec, network.dropout, training=network.training)
-        first_raw_adj, first_adj = cur_raw_adj, cur_adj
 
-        # BP to update weights
-        output = network.encoder.graph_encoder2(node_vec, cur_adj)
-        output = F.log_softmax(output, dim=-1)
+
+        if network.graph_module == 'gat':
+            assert self.config['graph_learn'] is False and self.config.get('max_iter', 10) == 0
+            node_vec = network.encoder(init_node_vec, init_adj)
+            output = F.log_softmax(node_vec, dim=-1)
+
+        elif network.graph_module == 'graphsage':
+            assert self.config['graph_learn'] is False and self.config.get('max_iter', 10) == 0
+            # Convert adj to DGLGraph
+            import dgl
+            from scipy import sparse
+            binarized_adj = sparse.coo_matrix(init_adj.detach().cpu().numpy() != 0)
+            dgl_graph = dgl.DGLGraph(binarized_adj)
+
+            node_vec = network.encoder(dgl_graph, init_node_vec)
+            output = F.log_softmax(node_vec, dim=-1)
+
+        else:
+            node_vec = torch.relu(network.encoder.graph_encoders[0](init_node_vec, cur_adj))
+            node_vec = F.dropout(node_vec, network.dropout, training=network.training)
+
+            # Add mid GNN layers
+            for encoder in network.encoder.graph_encoders[1:-1]:
+                node_vec = torch.relu(encoder(node_vec, cur_adj))
+                node_vec = F.dropout(node_vec, network.dropout, training=network.training)
+
+            # BP to update weights
+            output = network.encoder.graph_encoders[-1](node_vec, cur_adj)
+            output = F.log_softmax(output, dim=-1)
+
+
         score = self.model.score_func(labels[idx], output[idx])
         loss1 = self.model.criterion(output[idx], labels[idx])
 
         if self.config['graph_learn'] and self.config['graph_learn_regularization']:
             loss1 += self.add_graph_loss(cur_raw_adj, init_node_vec)
 
+        first_raw_adj, first_adj = cur_raw_adj, cur_adj
 
         if not mode == 'test':
             if self._epoch > self.config.get('pretrain_epoch', 0):
@@ -493,7 +737,7 @@ class ModelHandler(object):
 
         loss = 0
         iter_ = 0
-        while (iter_ == 0 or diff(cur_raw_adj, pre_raw_adj, first_raw_adj).item() > eps_adj) and iter_ < max_iter_:
+        while self.config['graph_learn'] and (iter_ == 0 or diff(cur_raw_adj, pre_raw_adj, first_raw_adj).item() > eps_adj) and iter_ < max_iter_:
             iter_ += 1
             pre_adj = cur_adj
             pre_raw_adj = cur_raw_adj
@@ -504,12 +748,16 @@ class ModelHandler(object):
             if update_adj_ratio is not None:
                 cur_adj = update_adj_ratio * cur_adj + (1 - update_adj_ratio) * first_adj
 
-            node_vec = torch.relu(network.encoder.graph_encoder1(init_node_vec, cur_adj))
+            node_vec = torch.relu(network.encoder.graph_encoders[0](init_node_vec, cur_adj))
             node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
 
+            # Add mid GNN layers
+            for encoder in network.encoder.graph_encoders[1:-1]:
+                node_vec = torch.relu(encoder(node_vec, cur_adj))
+                node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
 
             # BP to update weights
-            output = network.encoder.graph_encoder2(node_vec, cur_adj)
+            output = network.encoder.graph_encoders[-1](node_vec, cur_adj)
             output = F.log_softmax(output, dim=-1)
             score = self.model.score_func(labels[idx], output[idx])
             loss += self.model.criterion(output[idx], labels[idx])
@@ -522,7 +770,190 @@ class ModelHandler(object):
 
         if mode == 'test' and self.config.get('out_raw_learned_adj_path', None):
             out_raw_learned_adj_path = os.path.join(self.dirname, self.config['out_raw_learned_adj_path'])
-            np.save(out_raw_learned_adj_path, cur_raw_adj)
+            np.save(out_raw_learned_adj_path, cur_raw_adj.cpu())
+            print('Saved raw_learned_adj to {}'.format(out_raw_learned_adj_path))
+
+        if iter_ > 0:
+            loss = loss / iter_ + loss1
+        else:
+            loss = loss1
+
+        if training:
+            self.model.optimizer.zero_grad()
+            loss.backward()
+            self.model.clip_grad()
+            self.model.optimizer.step()
+
+        self._update_metrics(loss.item(), {'nloss': -loss.item(), self.model.metric_name: score}, 1, training=training)
+        return output[idx], labels[idx]
+
+
+
+    def _scalable_run_whole_epoch(self, data_loader, training=True, verbose=None, out_predictions=False):
+        '''Scalable run: BP after all iterations'''
+        mode = "train" if training else ("test" if self.is_test else "dev")
+        self.model.network.train(training)
+
+        init_adj, features, labels = data_loader['adj'], data_loader['features'], data_loader['labels']
+
+        if mode == 'train':
+            idx = data_loader['idx_train']
+        elif mode == 'dev':
+            idx = data_loader['idx_val']
+        else:
+            idx = data_loader['idx_test']
+
+        network = self.model.network
+
+        # Init
+        features = F.dropout(features, network.config.get('feat_adj_dropout', 0), training=network.training)
+        init_node_vec = features
+
+        # Randomly sample s anchor nodes
+        init_anchor_vec, sampled_node_idx = sample_anchors(init_node_vec, network.config.get('num_anchors', int(0.2 * init_node_vec.size(0))))
+
+        # Compute n x s node-anchor relationship matrix
+        cur_node_anchor_adj = network.learn_graph(network.graph_learner, init_node_vec, anchor_features=init_anchor_vec)
+
+        # Compute s x s anchor graph
+        cur_anchor_adj = compute_anchor_adj(cur_node_anchor_adj)
+
+
+        if self.config['graph_learn'] and self.config.get('max_iter', 10) > 0:
+            cur_node_anchor_adj = F.dropout(cur_node_anchor_adj, network.config.get('feat_adj_dropout', 0), training=network.training)
+
+        cur_anchor_adj = F.dropout(cur_anchor_adj, network.config.get('feat_adj_dropout', 0), training=network.training)
+
+        # Update node embeddings via node-anchor-node message passing
+        init_agg_vec = network.encoder.graph_encoders[0](init_node_vec, init_adj, anchor_mp=False, batch_norm=False)
+        node_vec = (1 - network.graph_skip_conn) * network.encoder.graph_encoders[0](init_node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False) + \
+                    network.graph_skip_conn * init_agg_vec
+
+        if network.encoder.graph_encoders[0].bn is not None:
+            node_vec = network.encoder.graph_encoders[0].compute_bn(node_vec)
+
+        node_vec = torch.relu(node_vec)
+        node_vec = F.dropout(node_vec, network.dropout, training=network.training)
+        anchor_vec = node_vec[sampled_node_idx]
+
+
+        first_node_anchor_adj, first_anchor_adj = cur_node_anchor_adj, cur_anchor_adj
+        first_init_agg_vec = network.encoder.graph_encoders[0](init_node_vec, first_node_anchor_adj, anchor_mp=True, batch_norm=False)
+
+
+        # Add mid GNN layers
+        for encoder in network.encoder.graph_encoders[1:-1]:
+            node_vec = (1 - network.graph_skip_conn) * encoder(node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False) + \
+                        network.graph_skip_conn * encoder(node_vec, init_adj, anchor_mp=False, batch_norm=False)
+
+            if encoder.bn is not None:
+                node_vec = encoder.compute_bn(node_vec)
+
+            node_vec = torch.relu(node_vec)
+            node_vec = F.dropout(node_vec, network.dropout, training=network.training)
+            anchor_vec = node_vec[sampled_node_idx]
+
+
+        # Compute output via node-anchor-node message passing
+        output = (1 - network.graph_skip_conn) * network.encoder.graph_encoders[-1](node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False) + \
+                    network.graph_skip_conn * network.encoder.graph_encoders[-1](node_vec, init_adj, anchor_mp=False, batch_norm=False)
+        output = F.log_softmax(output, dim=-1)
+        score = self.model.score_func(labels[idx], output[idx])
+        loss1 = self.model.criterion(output[idx], labels[idx])
+
+        if self.config['graph_learn'] and self.config['graph_learn_regularization']:
+            loss1 += self.add_graph_loss(cur_anchor_adj, init_anchor_vec)
+
+
+        if not mode == 'test':
+            if self._epoch > self.config.get('pretrain_epoch', 0):
+                max_iter_ = self.config.get('max_iter', 10) # Fine-tuning
+                if self._epoch == self.config.get('pretrain_epoch', 0) + 1:
+                    for k in self._dev_metrics:
+                        self._best_metrics[k] = -float('inf')
+
+            else:
+                max_iter_ = 0 # Pretraining
+        else:
+            max_iter_ = self.config.get('max_iter', 10)
+
+
+        if training:
+            eps_adj = float(self.config.get('eps_adj', 0)) # cora: 5.5e-8, cora w/o input graph: 1e-8, citeseer w/o input graph: 1e-8, wine: 2e-5, cancer: 2e-5, digtis: 2e-5
+        else:
+            eps_adj = float(self.config.get('test_eps_adj', self.config.get('eps_adj', 0)))
+
+
+        pre_node_anchor_adj = cur_node_anchor_adj
+
+        loss = 0
+        iter_ = 0
+        while self.config['graph_learn'] and (iter_ == 0 or diff(cur_node_anchor_adj, pre_node_anchor_adj, cur_node_anchor_adj).item() > eps_adj) and iter_ < max_iter_:
+            iter_ += 1
+            pre_node_anchor_adj = cur_node_anchor_adj
+
+            # Compute n x s node-anchor relationship matrix
+            cur_node_anchor_adj = network.learn_graph(network.graph_learner2, node_vec, anchor_features=anchor_vec)
+
+            # Compute s x s anchor graph
+            cur_anchor_adj = compute_anchor_adj(cur_node_anchor_adj)
+
+            cur_agg_vec = network.encoder.graph_encoders[0](init_node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False)
+
+            update_adj_ratio = self.config.get('update_adj_ratio', None)
+            if update_adj_ratio is not None:
+                cur_agg_vec = update_adj_ratio * cur_agg_vec + (1 - update_adj_ratio) * first_init_agg_vec
+
+            node_vec = (1 - network.graph_skip_conn) * cur_agg_vec + \
+                    network.graph_skip_conn * init_agg_vec
+
+            if network.encoder.graph_encoders[0].bn is not None:
+                node_vec = network.encoder.graph_encoders[0].compute_bn(node_vec)
+
+            node_vec = torch.relu(node_vec)
+            node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
+            anchor_vec = node_vec[sampled_node_idx]
+
+
+            # Add mid GNN layers
+            for encoder in network.encoder.graph_encoders[1:-1]:
+                mid_cur_agg_vec = encoder(node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False)
+                if update_adj_ratio is not None:
+                    mid_first_agg_vecc = encoder(node_vec, first_node_anchor_adj, anchor_mp=True, batch_norm=False)
+                    mid_cur_agg_vec = update_adj_ratio * mid_cur_agg_vec + (1 - update_adj_ratio) * mid_first_agg_vecc
+
+                node_vec = (1 - network.graph_skip_conn) * mid_cur_agg_vec + \
+                        network.graph_skip_conn * encoder(node_vec, init_adj, anchor_mp=False, batch_norm=False)
+
+                if encoder.bn is not None:
+                    node_vec = encoder.compute_bn(node_vec)
+
+                node_vec = torch.relu(node_vec)
+                node_vec = F.dropout(node_vec, self.config.get('gl_dropout', 0), training=network.training)
+                anchor_vec = node_vec[sampled_node_idx]
+
+
+            cur_agg_vec = network.encoder.graph_encoders[-1](node_vec, cur_node_anchor_adj, anchor_mp=True, batch_norm=False)
+            if update_adj_ratio is not None:
+                first_agg_vec = network.encoder.graph_encoders[-1](node_vec, first_node_anchor_adj, anchor_mp=True, batch_norm=False)
+                cur_agg_vec = update_adj_ratio * cur_agg_vec + (1 - update_adj_ratio) * first_agg_vec
+
+            output = (1 - network.graph_skip_conn) * cur_agg_vec + \
+                    network.graph_skip_conn * network.encoder.graph_encoders[-1](node_vec, init_adj, anchor_mp=False, batch_norm=False)
+
+            output = F.log_softmax(output, dim=-1)
+            score = self.model.score_func(labels[idx], output[idx])
+            loss += self.model.criterion(output[idx], labels[idx])
+
+            if self.config['graph_learn'] and self.config['graph_learn_regularization']:
+                loss += self.add_graph_loss(cur_anchor_adj, init_anchor_vec)
+
+            if self.config['graph_learn'] and not self.config.get('graph_learn_ratio', None) in (None, 0):
+                loss += SquaredFrobeniusNorm(cur_node_anchor_adj - pre_node_anchor_adj) * self.config.get('graph_learn_ratio')
+
+        if mode == 'test' and self.config.get('out_raw_learned_adj_path', None):
+            out_raw_learned_adj_path = os.path.join(self.dirname, self.config['out_raw_learned_adj_path'])
+            np.save(out_raw_learned_adj_path, cur_node_anchor_adj.cpu())
             print('Saved raw_learned_adj to {}'.format(out_raw_learned_adj_path))
 
         if iter_ > 0:
@@ -536,7 +967,7 @@ class ModelHandler(object):
             self.model.optimizer.step()
 
         self._update_metrics(loss.item(), {'nloss': -loss.item(), self.model.metric_name: score}, 1, training=training)
-        return output, labels
+        return output[idx], labels[idx]
 
     def _run_batch_epoch(self, data_loader, training=True, rl_ratio=0, verbose=10, out_predictions=False):
         start_time = time.time()
@@ -555,7 +986,14 @@ class ModelHandler(object):
             if self.config.get('no_gnn', False):
                 res = self.batch_no_gnn(x_batch, step, training=training, out_predictions=out_predictions)
             else:
-                res = self.batch_IGL_stop(x_batch, step, training=training, out_predictions=out_predictions)
+                if self.config.get('scalable_run', False):
+                    res = self.scalable_batch_IGL_stop(x_batch, step, training=training, out_predictions=out_predictions)
+                else:
+                    res = self.batch_IGL_stop(x_batch, step, training=training, out_predictions=out_predictions)
+
+
+
+
 
             loss = res['loss']
             metrics = res['metrics']

@@ -2,7 +2,6 @@ import argparse
 import yaml
 import torch
 import numpy as np
-import far_ho as far
 from collections import defaultdict, OrderedDict
 
 from core.model_handler import ModelHandler
@@ -76,10 +75,6 @@ def print_config(config):
     print("**************** MODEL CONFIGURATION ****************")
 
 
-
-
-
-
 def grid(kwargs):
     """Builds a mesh grid with given keyword arguments for this Config class.
     If the value is not a list, then it is considered fixed"""
@@ -93,6 +88,19 @@ def grid(kwargs):
         def __call__(self):
             return self.a
 
+    def merge_dicts(*dicts):
+        """
+        Merges dictionaries recursively. Accepts also `None` and returns always a (possibly empty) dictionary
+        """
+        from functools import reduce
+        def merge_two_dicts(x, y):
+            z = x.copy()  # start with x's keys and values
+            z.update(y)  # modifies z with y's keys and values & returns None
+            return z
+
+        return reduce(lambda a, nd: merge_two_dicts(a, nd if nd else {}), dicts, {})
+
+
     sin = OrderedDict({k: v for k, v in kwargs.items() if isinstance(v, list)})
     for k, v in sin.items():
         copy_v = []
@@ -101,16 +109,15 @@ def grid(kwargs):
         sin[k] = copy_v
 
     grd = np.array(np.meshgrid(*sin.values()), dtype=object).T.reshape(-1, len(sin.values()))
-    return [far.utils.merge_dicts(
+    return [merge_dicts(
         {k: v for k, v in kwargs.items() if not isinstance(v, list)},
         {k: vv[i]() if isinstance(vv[i], MncDc) else vv[i] for i, k in enumerate(sin)}
     ) for vv in grd]
 
+
 ################################################################################
 # Module Command-line Behavior #
 ################################################################################
-
-
 if __name__ == '__main__':
     cfg = get_args()
     config = get_config(cfg['config'])

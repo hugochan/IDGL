@@ -55,7 +55,7 @@ def vectorize_input(batch, config, training=True, device=None):
 def prepare_datasets(config):
     data = {}
     if config['data_type'] == 'network':
-        adj, features, labels, idx_train, idx_val, idx_test = network_data_utils.load_data(config['data_dir'], config['dataset_name'], knn_size=config.get('input_graph_knn_size', None), epsilon=config.get('input_graph_epsilon', None), knn_metric=config.get('knn_metric', 'cosine'), prob_del_edge=config.get('prob_del_edge', None), prob_add_edge=config.get('prob_add_edge', None), seed=config.get('data_seed', config['seed']))
+        adj, features, labels, idx_train, idx_val, idx_test = network_data_utils.load_data(config['data_dir'], config['dataset_name'], knn_size=config.get('input_graph_knn_size', None), epsilon=config.get('input_graph_epsilon', None), knn_metric=config.get('knn_metric', 'cosine'), prob_del_edge=config.get('prob_del_edge', None), prob_add_edge=config.get('prob_add_edge', None), seed=config.get('data_seed', config['seed']), sparse_init_adj=config.get('sparse_init_adj', False))
 
         device = config['device']
         data = {'adj': adj.to(device) if device else adj,

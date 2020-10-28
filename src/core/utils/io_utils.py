@@ -1,3 +1,9 @@
+'''
+Created on Nov, 2018
+
+@author: hugo
+
+'''
 import json
 import numpy as np
 

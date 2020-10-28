@@ -6,7 +6,7 @@ pretrained: null
 task_type: 'classification'
 
 # Output
-out_dir: '../out/cora/idgl'
+out_dir: '../out/cora/idgl_anchor'
 
 
 seed: 42
@@ -23,6 +23,11 @@ seed: 42
 # Model architecture
 model_name: 'GraphClf'
 
+# Scalable graph learning
+scalable_run: True
+num_anchors: 1000 # 1000!
+
+
 hidden_size: 16
 
 
@@ -32,9 +37,9 @@ use_bert: False
 
 
 # Regularization
-dropout: 0.5 # 0.5
-feat_adj_dropout: 0.5 # 0.5
-gl_dropout: 0.5 # 0.5
+dropout: 0.6 # 0.6!
+feat_adj_dropout: 0.5 # 0.5!
+gl_dropout: 0 # 0!
 
 # Graph neural networks
 bignn: False
@@ -42,21 +47,21 @@ graph_module: 'gcn'
 graph_type: 'dynamic'
 graph_learn: True
 graph_metric_type: 'weighted_cosine' # kernel, attention, gat_attention
-graph_skip_conn: 0.8 # 0.9, IL: 0.8
-update_adj_ratio: 0.1 # IL: 0.1
+graph_skip_conn: 0.8 # 0.9, IL: 0.8!
+update_adj_ratio: 0.1 # IL: 0.1!
 graph_include_self: False
 graph_learn_regularization: True
-smoothness_ratio: 0.2 # 0.2, IL: 0.2
-degree_ratio: 0 # 0
-sparsity_ratio: 0 # 0, IL: 0
-graph_learn_ratio: 0 # IL: 0
+smoothness_ratio: 0.2 # 0.2, IL: 0.2!
+degree_ratio: 0 # 0!
+sparsity_ratio: 0.1 # 0, IL: 0.1!
+graph_learn_ratio: 0 # IL: 0!
 graph_learn_hidden_size: 70 # kernel: 100, attention: 70
-graph_learn_epsilon: 0 # weighted_cosine: 0
+graph_learn_epsilon: 0 # weighted_cosine: 0!
 graph_learn_topk: null # 200
 # graph_learn_hidden_size2: 70 # kernel: 100, attention: 70
 # graph_learn_epsilon2: 0 # weighted_cosine: 0
 # graph_learn_topk2: null # 200
-graph_learn_num_pers: 4 # weighted_cosine: GL: 4, IGL: 4
+graph_learn_num_pers: 4 # weighted_cosine: GL: 4, IGL: 4!
 graph_hops: 2
 
 # GAT only
@@ -66,16 +71,16 @@ gat_alpha: 0.2
 
 # Training
 optimizer: 'adam'
-learning_rate: 0.01 # 0.01
-weight_decay: 0.0005 # 0.0005
+learning_rate: 0.01 # 0.01!
+weight_decay: 0.0005 # 0.0005!
 lr_patience: 2
 lr_reduce_factor: 0.5
 grad_clipping: null
 grad_accumulated_steps: 1
 eary_stop_metric: 'nloss' # negative loss
 pretrain_epoch: 0 # 0
-max_iter: 10
-eps_adj: 4e-5 # IGL: 4e-5
+max_iter: 10 # 10
+eps_adj: 8.5e-5 # IGL: 8.5e-5!
 
 
 # note: RL is not used
@@ -97,7 +102,7 @@ print_every_epochs: 500 # Print every X epochs
 
 # Testing
 out_predictions: False # Whether to output predictions
-out_raw_learned_adj_path: 'cora_idgl_raw_adj.npy'
+out_raw_learned_adj_path: 'cora_idgl_node_anchor_adj.npy'
 save_params: True # Whether to save params
 logging: True # Turn it off for Codalab
 
