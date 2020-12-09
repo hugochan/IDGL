@@ -43,6 +43,7 @@ Please take the following steps to create a python virtual environment.
     - You can find the output data in the `out_dir` folder specified in the config file.
     - You can add `--multi_run` in the command to run multiple times with different random seeds. Please see `config/cora/idgl.yml` for example. 
     - To run IDGL & IDGL-Anch without the iterative learning or graph regularization components, please set `max_iter` to `0` or `graph_learn_regularization` to `False` in the config file.
+    - You can download the 20News data from [here](http://qwone.com/~jason/20Newsgroups/20news-bydate.tar.gz), and move it to the `data` folder.
 
 
 
