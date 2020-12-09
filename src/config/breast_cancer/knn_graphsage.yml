@@ -1,0 +1,101 @@
+# Data
+data_type: 'uci'
+dataset_name: 'breast_cancer'
+pretrained: null
+task_type: 'classification'
+
+# Output
+out_dir: '../out/breast_cancer/knn_graphsage'
+
+
+
+seed: 42
+
+n_train: 10
+n_val: 20
+
+# Model architecture
+model_name: 'GraphClf'
+
+hidden_size: 16
+
+
+# Bert configure
+use_bert: False
+
+
+
+# Regularization
+dropout: 0.5 # 0.5
+gl_dropout: 0 # 0
+
+
+# Graph neural networks
+bignn: False
+graph_module: 'graphsage'
+graph_type: 'dynamic'
+graph_learn: False
+graph_metric_type: 'weighted_cosine' # weighted_cosine, kernel, attention, cosine
+graph_include_self: False
+graph_skip_conn: 0.25 # 0.25, IL: 0.25
+update_adj_ratio: 0.1 # 0.1
+graph_learn_regularization: False
+smoothness_ratio: 0.4 # kernel: 0.5, weighted_cosine: 0.4
+degree_ratio: 0.2 # kernel: 0.2, weighted_cosine: 0.2
+sparsity_ratio: 0.1 # kernel: 0.3, weighted_cosine: 0.1
+graph_learn_ratio: 0 # 0
+input_graph_knn_size: 40 # cosine-KNN-GCN: 55 (no GL), kernel: 50, 45, weighted_cosine: 45, IL:40
+graph_learn_hidden_size: 20 # kernel: 20, attention: 40
+graph_learn_epsilon: 0.9 # kernel-GCN: 0.9, weighted_cosine: 0.9
+graph_learn_topk: null # kernel-GCN: 50, attn-GCN: 40
+graph_learn_hidden_size2: 25 # kernel: 25
+graph_learn_epsilon2: 0.9 # kernel-GCN: 0.8, weighted_cosine: 0.9
+graph_learn_topk2: null
+graph_learn_num_pers: 1 # weighted_cosine: 1, attention: 1, gat_attention: 8
+graph_hops: 2
+
+# GAT only
+gat_nhead: 8
+gat_alpha: 0.2
+graphsage_agg_type: 'gcn'
+
+# Training
+optimizer: 'adam' # best
+learning_rate: 0.01
+weight_decay: 0.0005
+lr_patience: 2
+lr_reduce_factor: 0.5 # GCN: 0.5
+grad_clipping: null
+grad_accumulated_steps: 1
+eary_stop_metric: 'nloss' # negative loss
+pretrain_epoch: 0 # 0
+max_iter: 0
+eps_adj: 0 # 0
+
+
+# note: RL is not used
+rl_ratio: 0  # use mixed objective if > 0; ratio of RL in the loss function
+rl_ratio_power: 1  # increase rl_ratio by **= rl_ratio_power after each epoch; (0, 1]
+rl_start_epoch: 1  # start RL at which epoch (later start can ensure a strong baseline)?
+max_rl_ratio: 0.99
+rl_reward_metric: 'acc'
+rl_wmd_ratio: 0
+
+
+random_seed: 1234
+shuffle: True # Whether to shuffle the examples during training
+max_epochs: 100000
+patience: 100
+verbose: 20
+print_every_epochs: 500 # Print every X epochs
+
+
+# Testing
+out_predictions: False # Whether to output predictions
+save_params: True # Whether to save params
+logging: True # Turn it off for Codalab
+
+
+# Device
+no_cuda: False
+cuda_id: 0

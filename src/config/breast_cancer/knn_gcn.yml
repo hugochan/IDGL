@@ -1,24 +1,18 @@
 # Data
-data_type: 'network'
-dataset_name: 'cora'
-data_dir: '../data/cora/'
+data_type: 'uci'
+dataset_name: 'breast_cancer'
 pretrained: null
 task_type: 'classification'
 
 # Output
-out_dir: '../out/cora/idgl'
+out_dir: '../out/breast_cancer/knn_gcn'
+
 
 
 seed: 42
 
-# Run multiple times with different random seeds
-# seed:
-#     - 42
-#     - 448
-#     - 854
-#     - 29493
-#     - 88867
-
+n_train: 10
+n_val: 20
 
 # Model architecture
 model_name: 'GraphClf'
@@ -33,30 +27,31 @@ use_bert: False
 
 # Regularization
 dropout: 0.5 # 0.5
-feat_adj_dropout: 0.5 # 0.5
-gl_dropout: 0.5 # 0.5
+gl_dropout: 0 # 0
+
 
 # Graph neural networks
 bignn: False
 graph_module: 'gcn'
 graph_type: 'dynamic'
-graph_learn: True
-graph_metric_type: 'weighted_cosine' # kernel, attention, gat_attention
-graph_skip_conn: 0.8 # 0.9, IL: 0.8
-update_adj_ratio: 0.1 # IL: 0.1
+graph_learn: False
+graph_metric_type: 'weighted_cosine' # weighted_cosine, kernel, attention, cosine
 graph_include_self: False
-graph_learn_regularization: True
-smoothness_ratio: 0.2 # 0.2, IL: 0.2
-degree_ratio: 0 # 0
-sparsity_ratio: 0 # 0, IL: 0
-graph_learn_ratio: 0 # IL: 0
-graph_learn_hidden_size: 70 # kernel: 100, attention: 70
-graph_learn_epsilon: 0 # weighted_cosine: 0
-graph_learn_topk: null # 200
-# graph_learn_hidden_size2: 70 # kernel: 100, attention: 70
-# graph_learn_epsilon2: 0 # weighted_cosine: 0
-# graph_learn_topk2: null # 200
-graph_learn_num_pers: 4 # weighted_cosine: GL: 4, IGL: 4
+graph_skip_conn: 0.25 # 0.25, IL: 0.25
+update_adj_ratio: 0.1 # 0.1
+graph_learn_regularization: False
+smoothness_ratio: 0.4 # kernel: 0.5, weighted_cosine: 0.4
+degree_ratio: 0.2 # kernel: 0.2, weighted_cosine: 0.2
+sparsity_ratio: 0.1 # kernel: 0.3, weighted_cosine: 0.1
+graph_learn_ratio: 0 # 0
+input_graph_knn_size: 55 # cosine-KNN-GCN: 55 (no GL), kernel: 50, 45, weighted_cosine: 45, IL:40
+graph_learn_hidden_size: 20 # kernel: 20, attention: 40
+graph_learn_epsilon: 0.9 # kernel-GCN: 0.9, weighted_cosine: 0.9
+graph_learn_topk: null # kernel-GCN: 50, attn-GCN: 40
+graph_learn_hidden_size2: 25 # kernel: 25
+graph_learn_epsilon2: 0.9 # kernel-GCN: 0.8, weighted_cosine: 0.9
+graph_learn_topk2: null
+graph_learn_num_pers: 1 # weighted_cosine: 1, attention: 1, gat_attention: 8
 graph_hops: 2
 
 # GAT only
@@ -65,17 +60,17 @@ gat_alpha: 0.2
 
 
 # Training
-optimizer: 'adam'
-learning_rate: 0.01 # 0.01
-weight_decay: 0.0005 # 0.0005
+optimizer: 'adam' # best
+learning_rate: 0.01
+weight_decay: 0.0005
 lr_patience: 2
-lr_reduce_factor: 0.5
+lr_reduce_factor: 0.5 # GCN: 0.5
 grad_clipping: null
 grad_accumulated_steps: 1
 eary_stop_metric: 'nloss' # negative loss
 pretrain_epoch: 0 # 0
-max_iter: 10
-eps_adj: 4e-5 # IGL: 4e-5
+max_iter: 0
+eps_adj: 0 # 0
 
 
 # note: RL is not used
@@ -89,7 +84,7 @@ rl_wmd_ratio: 0
 
 random_seed: 1234
 shuffle: True # Whether to shuffle the examples during training
-max_epochs: 10000
+max_epochs: 100000
 patience: 100
 verbose: 20
 print_every_epochs: 500 # Print every X epochs
@@ -97,7 +92,6 @@ print_every_epochs: 500 # Print every X epochs
 
 # Testing
 out_predictions: False # Whether to output predictions
-out_raw_learned_adj_path: 'cora_idgl_raw_adj.npy'
 save_params: True # Whether to save params
 logging: True # Turn it off for Codalab
 

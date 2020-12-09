@@ -3,6 +3,10 @@
 Code & data accompanying the NeurIPS 2020 paper ["Iterative Deep Graph Learning for Graph Neural Networks: Better and Robust Node Embeddings"](https://arxiv.org/abs/2006.13009).
 
 
+## Architecture
+
+![IDGL architecture.](images/arch.png)
+
 ## Get started
 
 
@@ -19,7 +23,7 @@ Please take the following steps to create a python virtual environment.
 
 
 
-### Run the IDGL model
+### Run the IDGL & IDGL-Anch models
 
 * Cd into the `src` folder
 * Run the IDGL model and report the performance
@@ -28,35 +32,18 @@ Please take the following steps to create a python virtual environment.
          python main.py -config config/cora/idgl.yml
     ```
 
-    ```
-         python main.py -config config/wine/idgl.yml
-    ```
-
-    ```
-         python main.py -config config/mrd/idgl.yml
-    ```
-
-* Note: you can add `--multi_run` in the command to run multiple times with different random seeds. Please see `config/cora/idgl.yml` for example.
-
-
-### Run the IDGL-anch model
-
-* Cd into the `src` folder
-* Run the IDGL-anch model and report the performance
+* Run the IDGL-Anch model and report the performance
 
     ```
          python main.py -config config/cora/idgl_anchor.yml
     ```
 
-    ```
-         python main.py -config config/wine/idgl_anchor.yml
-    ```
 
-    ```
-         python main.py -config config/mrd/idgl_anchor.yml
-    ```
+* Notes: 
+    - You can find the output data in the `out_dir` folder specified in the config file.
+    - You can add `--multi_run` in the command to run multiple times with different random seeds. Please see `config/cora/idgl.yml` for example. 
+    - To run IDGL & IDGL-Anch without the iterative learning or graph regularization components, please set `max_iter` to `0` or `graph_learn_regularization` to `False` in the config file.
 
-* Note: you can add `--multi_run` in the command to run multiple times with different random seeds. Please see `config/cora/idgl_anchor.yml` for example.
 
 
 
@@ -67,10 +54,10 @@ If you found this code useful, please consider citing the following paper:
 Yu Chen, Lingfei Wu and Mohammed J. Zaki. **"Iterative Deep Graph Learning for Graph Neural Networks: Better and Robust Node Embeddings."** In *Proceedings of the 34th Conference on Neural Information Processing Systems (NeurIPS 2020), Dec 6-12, 2020.*
 
 
-    @inproceedings{chen2020iterative,
+    @article{chen2020iterative,
       title={Iterative Deep Graph Learning for Graph Neural Networks: Better and Robust Node Embeddings},
-      author={Chen, Yu and Wu, Lingfei and Zaki, Mohammed J},
-      booktitle={Proceedings of the 34th Conference on Neural Information Processing Systems},
+      author={Chen, Yu and Wu, Lingfei and Zaki, Mohammed},
+      journal={Advances in Neural Information Processing Systems},
+      volume={33},
       year={2020}
     }
-    

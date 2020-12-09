@@ -6,18 +6,17 @@ pretrained: null
 task_type: 'classification'
 
 # Output
-out_dir: '../out/cora/idgl'
+out_dir: '../out/cora/idgl_del_edges'
+
 
 
 seed: 42
 
-# Run multiple times with different random seeds
-# seed:
-#     - 42
-#     - 448
-#     - 854
-#     - 29493
-#     - 88867
+prob_del_edge: # Set missing edge percentage, range [0, 1], if 100% delete, you might instead use kNN-graph for init_adj
+          - 0.25
+          - 0.5
+          - 0.75
+
 
 
 # Model architecture
@@ -42,7 +41,7 @@ graph_module: 'gcn'
 graph_type: 'dynamic'
 graph_learn: True
 graph_metric_type: 'weighted_cosine' # kernel, attention, gat_attention
-graph_skip_conn: 0.8 # 0.9, IL: 0.8
+graph_skip_conn: 0.7 # 0.9, IL: 0.7, 0.8
 update_adj_ratio: 0.1 # IL: 0.1
 graph_include_self: False
 graph_learn_regularization: True
@@ -97,7 +96,6 @@ print_every_epochs: 500 # Print every X epochs
 
 # Testing
 out_predictions: False # Whether to output predictions
-out_raw_learned_adj_path: 'cora_idgl_raw_adj.npy'
 save_params: True # Whether to save params
 logging: True # Turn it off for Codalab
 

@@ -1,0 +1,113 @@
+# Data
+data_type: 'text'
+dataset_name: '20news'
+data_dir: '../data/20news/'
+pretrained_word_embed_file: 'your_path_to_glove_vec/glove.840B.300d.txt'
+pretrained: null
+task_type: 'classification'
+
+# Output
+out_dir: '../out/20news/idgl_anchor'
+
+
+
+data_seed: 1234 # Fixed
+seed: 1234
+
+# Model architecture
+model_name: 'TextGraphClf'
+
+# Scalable graph learning
+scalable_run: True
+ratio_anchors: 0.4 # 0.4!
+
+
+
+hidden_size: 128 # 128!
+
+
+# Bert configure
+use_bert: False
+
+
+
+# Regularization
+dropout: 0.5
+gl_dropout: 0 # IGL: 0!
+
+
+# Graph neural networks
+bignn: False
+graph_module: 'gcn'
+graph_type: 'dynamic'
+graph_learn: True
+graph_metric_type: 'weighted_cosine' # weighted_cosine, kernel, attention, gat_attention, cosine
+graph_skip_conn: 0.1 # GL: 0.1, IGL: 0.1!
+update_adj_ratio: 0.3 # IGL: 0.3!
+graph_include_self: False # cosine-KNN-GCN: False
+graph_learn_regularization: True
+smoothness_ratio: 0.4 # GL: 0.4!
+degree_ratio: 0 # GL: 0!
+sparsity_ratio: 0.3 # GL: 0.3!
+graph_learn_ratio: 0 # 0
+input_graph_knn_size: 950 # IGL: 950!
+graph_learn_hidden_size: null
+graph_learn_epsilon: 0.4 # GL: 0.3, IGL: 0.4!
+graph_learn_topk: null #
+# graph_learn_hidden_size2: 70 # kernel: 90, attention: 70
+# graph_learn_epsilon2: 0 # weighted_cosine: 0
+# graph_learn_topk2: null # attn-GCN: 140: 64.1, kernel-GCN: 100
+graph_learn_num_pers: 12 # weighted_cosine: IGL: 12!
+graph_hops: 2
+
+# GAT only
+gat_nhead: 8
+gat_alpha: 0.2
+
+
+# Training
+optimizer: 'adam' # best
+learning_rate: 0.001 # adam: 0.001
+weight_decay: 0 # adam: 0
+lr_patience: 2
+lr_reduce_factor: 0.5 # GCN: 0.5
+grad_clipping: null # null
+grad_accumulated_steps: 1
+eary_stop_metric: 'acc' # acc
+pretrain_epoch: 0 #
+max_iter: 10
+eps_adj: 1e-2 # 1e-2!
+
+
+
+# Text data only
+batch_size: 16 # 16
+data_split_ratio: '0.7,0.3' # train/dev split
+fix_vocab_embed: True
+word_embed_dim: 300
+top_word_vocab: 10000
+min_word_freq: 10
+max_seq_len: 1000
+word_dropout: 0.5 # 0.5
+rnn_dropout: 0.5 # 0.5
+no_gnn: False
+
+
+
+random_seed: 1234
+shuffle: True # Whether to shuffle the examples during training
+max_epochs: 1000
+patience: 10
+verbose: -1
+print_every_epochs: 1 # Print every X epochs
+
+
+# Testing
+out_predictions: False # Whether to output predictions
+save_params: True # Whether to save params
+logging: True # Turn it off for Codalab
+
+
+# Device
+no_cuda: False
+cuda_id: 0
