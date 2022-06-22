@@ -1,5 +1,5 @@
 nltk==3.4.5
-numpy==1.15.4
+numpy==1.22.0
 scipy==1.2.3
 PyYAML==5.1
 torch==0.4.1.post2
