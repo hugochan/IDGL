@@ -1,6 +1,6 @@
 nltk==3.4.5
 numpy==1.15.4
-scipy==1.2.3
+scipy==1.10.0
 PyYAML==5.1
 torch==0.4.1.post2
 networkx==2.1
