@@ -1,4 +1,4 @@
-nltk==3.4.5
+nltk==3.6.6
 numpy==1.15.4
 scipy==1.2.3
 PyYAML==5.1
